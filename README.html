@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>README</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 900px; margin: 0 auto; padding: 2em; line-height: 1.6; color: #222; background: #fff; }
+  h1 { border-bottom: 2px solid #0366d6; padding-bottom: 0.3em; }
+  h2 { border-bottom: 1px solid #e1e4e8; padding-bottom: 0.2em; margin-top: 1.5em; }
+  code { background: #f6f8fa; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f6f8fa; padding: 16px; border-radius: 6px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+  th, td { border: 1px solid #dfe2e5; padding: 8px 12px; text-align: left; }
+  th { background: #f6f8fa; font-weight: 600; }
+  tr:nth-child(even) { background: #fafbfc; }
+  blockquote { border-left: 4px solid #0366d6; margin: 0; padding: 0 1em; color: #555; }
+  a { color: #0366d6; }
+  strong { font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>Global 1.5° Probabilistic S2S Weather Prediction Model</h1>
+<p>A deep learning model for probabilistic subseasonal-to-seasonal (S2S) weather prediction
+at 1.5° resolution with weekly time steps, <strong>focused on week-3+ lead times</strong>.</p>
+<h2>科学动机</h2>
+<p>3 周以上天气预报的可预测性来源从大气初始条件迁移到<strong>慢变边界强迫</strong>：
+海表温度（SST）、土壤湿度、积雪/海冰、季节辐射循环。MJO 和 ENSO 等气候模态
+提供了额外的 3-4 周预测信号。</p>
+<p>常规 NWP 模型在这个时间尺度上的技巧迅速衰减。本项目的目标是利用深度学习
+直接从慢变变量中学习遥相关和边界强迫驱动的预测信号。</p>
+<h2>预测目标和变量</h2>
+<h3>预测目标</h3>
+<table>
+<thead>
+<tr>
+<th>变量</th>
+<th>说明</th>
+<th>概率头</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>t2m</strong></td>
+<td>2 米近地面温度</td>
+<td>Gaussian（CRPS 损失）</td>
+</tr>
+<tr>
+<td><strong>tp</strong></td>
+<td>总降水量</td>
+<td>分位数回归（Pinball 损失）</td>
+</tr>
+</tbody>
+</table>
+<h3>输入变量（12 个 surface-only）</h3>
+<table>
+<thead>
+<tr>
+<th>分组</th>
+<th>变量</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>慢变强迫</strong></td>
+<td>sst, swvl1, sd, siconc</td>
+<td>SST、土壤湿度、雪深、海冰覆盖</td>
+</tr>
+<tr>
+<td><strong>大气状态</strong></td>
+<td>msl, u10, v10</td>
+<td>海平面气压、10 米风</td>
+</tr>
+<tr>
+<td><strong>辐射/能量</strong></td>
+<td>tisr, ssr, str</td>
+<td>大气顶/地表短波、地表长波辐射</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>刻意不包含 pressure-level 变量：对流层中上层的初始条件信息在 3 周后几乎完全丢失。</p>
+</blockquote>
+<h2>模型架构</h2>
+<div class="codehilite"><pre><span></span><code>输入:
+  x_atmos (6 通道)  ──→  AtmosEncoder (ConvNeXt)  ──→  z_atmos
+  x_slow  (4 通道)  ──→  SlowEncoder  (ConvNeXt)  ──→  z_slow
+  x_index (6 标量)   ──→  IndexEmbedding (MLP)    ──→  z_idx
+
+  z_slow + z_atmos  ──→  CrossAttentionFusion  ──→  z_fused
+  z_fused + z_idx   ──→  GaussianHead  ──→  μ, σ (t2m)
+                      ──→  QuantileHead  ──→  [q₀.₁, q₀.₂₅, q₀.₅, q₀.₇₅, q₀.₉] (tp)
+</code></pre></div>
+
+<h3>关键设计选择</h3>
+<ul>
+<li><strong>ConvNeXt 编码器</strong>：轻量卷积，提取大气和慢变量的空间特征</li>
+<li><strong>交叉注意力融合</strong>：显式建模遥相关（热带 SST → 中纬度温度），CNN 感受野不够</li>
+<li><strong>气候指数嵌入</strong>：MJO/ENSO/NAO/AO 作为标量条件信号直接注入</li>
+<li><strong>独立概率头</strong>：t2m 用 Gaussian CRPS，降水用分位数回归（偏态分布）</li>
+<li><strong>参数量</strong>：~36M，单 GPU 轻松训练</li>
+</ul>
+<h2>数据</h2>
+<h3>数据源</h3>
+<table>
+<thead>
+<tr>
+<th>数据</th>
+<th>来源</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ERA5 月均 surface</td>
+<td>CDS API</td>
+<td>12 变量，0.25°→1.5°，~500MB/25年</td>
+</tr>
+<tr>
+<td>MJO RMM 指数</td>
+<td>BOM Australia</td>
+<td>日尺度，30-90 天周期</td>
+</tr>
+<tr>
+<td>Niño 3.4 指数</td>
+<td>NOAA CPC</td>
+<td>ENSO 监测</td>
+</tr>
+<tr>
+<td>NAO/AO 指数</td>
+<td>NOAA CPC</td>
+<td>中纬度环流模态</td>
+</tr>
+</tbody>
+</table>
+<h3>数据集划分</h3>
+<table>
+<thead>
+<tr>
+<th>时期</th>
+<th>年份</th>
+<th>月数</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>训练</td>
+<td>1995–2014</td>
+<td>240</td>
+<td>模型训练</td>
+</tr>
+<tr>
+<td>验证</td>
+<td>2015–2016</td>
+<td>24</td>
+<td>早停和超参数选择</td>
+</tr>
+<tr>
+<td>测试</td>
+<td>2017–2019</td>
+<td>36</td>
+<td>最终评估</td>
+</tr>
+</tbody>
+</table>
+<h3>Mock 数据（验证用）</h3>
+<p><code>data/mock_era5.py</code> 可生成本地模拟数据进行 pipeline 测试，
+无需网络下载。模拟数据包含：
+- 季节性温度循环（南北半球反相）
+- Niño 3.4 型热带 SST 异常
+- SST → t2m 遥相关信号（1 个月滞后）
+- 偏态降水分布、极地雪/冰变量</p>
+<h2>训练</h2>
+<div class="codehilite"><pre><span></span><code><span class="c1"># 完整训练（GPU）</span>
+python<span class="w"> </span>-m<span class="w"> </span>training.train<span class="w"> </span>--config<span class="w"> </span>configs/config.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--output_dir<span class="w"> </span>./checkpoints<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--epochs<span class="w"> </span><span class="m">100</span><span class="w"> </span>--device<span class="w"> </span>cuda
+</code></pre></div>
+
+<h3>训练配置</h3>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>优化器</td>
+<td>AdamW</td>
+<td>lr=1e-3, weight_decay=1e-5</td>
+</tr>
+<tr>
+<td>学习率策略</td>
+<td>Cosine annealing</td>
+<td>5 epoch 线性 warmup</td>
+</tr>
+<tr>
+<td>批量大小</td>
+<td>32</td>
+<td></td>
+</tr>
+<tr>
+<td>Epochs</td>
+<td>100</td>
+<td>Phase 1: 单 lead time</td>
+</tr>
+<tr>
+<td>混合精度</td>
+<td>AMP (CUDA 可选)</td>
+<td></td>
+</tr>
+<tr>
+<td>纬度加权</td>
+<td>cos(lat)</td>
+<td>面积加权平均</td>
+</tr>
+</tbody>
+</table>
+<h3>损失函数</h3>
+<ul>
+<li><strong>t2m</strong>：Gaussian CRPS（解析形式，无需采样）</li>
+<li><strong>tp</strong>：分位数 Pinball loss（τ = 0.1, 0.25, 0.5, 0.75, 0.9）</li>
+</ul>
+<h3>Lead time 阶段</h3>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>Epochs</th>
+<th>Lead Times</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Phase 1</td>
+<td>1-50</td>
+<td>1 个月</td>
+<td>单 lead time 训练</td>
+</tr>
+<tr>
+<td>Phase 2</td>
+<td>51-80</td>
+<td>1,2,3 个月</td>
+<td>多 lead time 联合</td>
+</tr>
+<tr>
+<td>Phase 3</td>
+<td>81-100</td>
+<td>1,2,3 个月</td>
+<td>微调 + 早停</td>
+</tr>
+</tbody>
+</table>
+<h2>评估</h2>
+<div class="codehilite"><pre><span></span><code><span class="c1"># 数值评估</span>
+python<span class="w"> </span>-m<span class="w"> </span>evaluation.run_eval<span class="w"> </span>--checkpoint<span class="w"> </span>./checkpoints/best_model.pt<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">2015</span><span class="w"> </span><span class="m">2016</span><span class="w"> </span>--device<span class="w"> </span>cuda
+
+<span class="c1"># 可视化</span>
+python<span class="w"> </span>-m<span class="w"> </span>evaluation.run_plots<span class="w"> </span>--checkpoint<span class="w"> </span>./checkpoints/best_model.pt<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">2015</span><span class="w"> </span><span class="m">2016</span><span class="w"> </span>--output<span class="w"> </span>./results<span class="w"> </span>--device<span class="w"> </span>cuda
+</code></pre></div>
+
+<h3>评估指标</h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>说明</th>
+<th>目标</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>CRPS</strong></td>
+<td>连续分级概率评分（主排名指标）</td>
+<td>越小越好</td>
+</tr>
+<tr>
+<td><strong>CRPSS</strong></td>
+<td>CRPS 技巧评分（vs 气候态）</td>
+<td>&gt;0 表示优于气候态</td>
+</tr>
+<tr>
+<td><strong>RMSE</strong></td>
+<td>均方根误差（确定性）</td>
+<td>辅助参考</td>
+</tr>
+<tr>
+<td><strong>ACC</strong></td>
+<td>异常相关系数</td>
+<td>&gt;0.6 为有用</td>
+</tr>
+<tr>
+<td><strong>Rank Histogram</strong></td>
+<td>校准诊断</td>
+<td>平坦 = 良好校准</td>
+</tr>
+<tr>
+<td><strong>Spread-Skill Ratio</strong></td>
+<td>集合散度 vs 误差</td>
+<td>≈1.0 理想</td>
+</tr>
+</tbody>
+</table>
+<h3>Baseline 对比</h3>
+<ol>
+<li><strong>气候态</strong>：用训练期月平均气候态作为预测</li>
+<li><strong>持续性</strong>：假设异常持续</li>
+<li><strong>阻尼持续性</strong>：异常指数衰减</li>
+</ol>
+<h3>Mock 数据验证结果（20 epochs）</h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>模型</th>
+<th>气候态 Baseline</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>t2m CRPS</td>
+<td><strong>0.61 K</strong></td>
+<td>2.79 K</td>
+</tr>
+<tr>
+<td>t2m RMSE</td>
+<td><strong>1.10 K</strong></td>
+<td>5.00 K</td>
+</tr>
+<tr>
+<td>t2m CRPSS</td>
+<td><strong>+0.78</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td>t2m R²</td>
+<td><strong>0.90</strong></td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h2>项目结构</h2>
+<div class="codehilite"><pre><span></span><code><span class="n">weather_prob_model</span><span class="o">/</span>
+<span class="err">├──</span><span class="w"> </span><span class="n">configs</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">config</span><span class="o">.</span><span class="n">yaml</span><span class="w">              </span><span class="c1"># 主配置（模型、训练、评估）</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="n">variables</span><span class="o">.</span><span class="n">yaml</span><span class="w">           </span><span class="c1"># 变量定义和分组</span>
+<span class="err">├──</span><span class="w"> </span><span class="n">data</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">download_era5_monthly</span><span class="o">.</span><span class="n">py</span><span class="w"> </span><span class="c1"># CDS API 下载（月均数据）</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">download_climate_indices</span><span class="o">.</span><span class="n">py</span><span class="w"> </span><span class="c1"># MJO/ENSO/NAO/AO 下载</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">mock_era5</span><span class="o">.</span><span class="n">py</span><span class="w">             </span><span class="c1"># 本地模拟数据生成（测试用）</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">dataset</span><span class="o">.</span><span class="n">py</span><span class="w">               </span><span class="c1"># PyTorch Dataset</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">normalization</span><span class="o">.</span><span class="n">py</span><span class="w">         </span><span class="c1"># Z-score 归一化</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="n">weekly_aggregate</span><span class="o">.</span><span class="n">py</span><span class="w">      </span><span class="c1"># 日→周聚合（Phase 2）</span>
+<span class="err">├──</span><span class="w"> </span><span class="n">models</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">encoder</span><span class="o">.</span><span class="n">py</span><span class="w">               </span><span class="c1"># ConvNeXt 大气编码器</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">slow_encoder</span><span class="o">.</span><span class="n">py</span><span class="w">          </span><span class="c1"># 慢变量编码器</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">cross_attention</span><span class="o">.</span><span class="n">py</span><span class="w">       </span><span class="c1"># 交叉注意力遥相关融合</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">index_embedding</span><span class="o">.</span><span class="n">py</span><span class="w">       </span><span class="c1"># 气候指数嵌入</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">prob_head</span><span class="o">.</span><span class="n">py</span><span class="w">             </span><span class="c1"># Gaussian + 分位数头</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="n">weather_model</span><span class="o">.</span><span class="n">py</span><span class="w">         </span><span class="c1"># 完整模型</span>
+<span class="err">├──</span><span class="w"> </span><span class="n">losses</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">crps_loss</span><span class="o">.</span><span class="n">py</span><span class="w">             </span><span class="c1"># 解析 Gaussian CRPS</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="n">quantile_loss</span><span class="o">.</span><span class="n">py</span><span class="w">         </span><span class="c1"># 分位数 Pinball loss</span>
+<span class="err">├──</span><span class="w"> </span><span class="n">training</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">train</span><span class="o">.</span><span class="n">py</span><span class="w">                 </span><span class="c1"># 训练主脚本</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="n">scheduler</span><span class="o">.</span><span class="n">py</span><span class="w">             </span><span class="c1"># LR 调度 + 课程学习</span>
+<span class="err">├──</span><span class="w"> </span><span class="n">evaluation</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">metrics</span><span class="o">.</span><span class="n">py</span><span class="w">               </span><span class="c1"># CRPS/CRPSS/RMSE/ACC/校准</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">baselines</span><span class="o">.</span><span class="n">py</span><span class="w">             </span><span class="c1"># 气候态/持续性 baseline</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">calibration</span><span class="o">.</span><span class="n">py</span><span class="w">           </span><span class="c1"># Rank Histogram/PIT/校准</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">plot_results</span><span class="o">.</span><span class="n">py</span><span class="w">          </span><span class="c1"># 空间图/散点图/直方图</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">run_eval</span><span class="o">.</span><span class="n">py</span><span class="w">              </span><span class="c1"># 评估入口</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">run_plots</span><span class="o">.</span><span class="n">py</span><span class="w">             </span><span class="c1"># 可视化入口</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="n">diagnose</span><span class="o">.</span><span class="n">py</span><span class="w">              </span><span class="c1"># 数据诊断</span>
+<span class="err">├──</span><span class="w"> </span><span class="n">scripts</span><span class="o">/</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">run_download</span><span class="o">.</span><span class="n">sh</span><span class="w">          </span><span class="c1"># 一键下载</span>
+<span class="err">│</span><span class="w">   </span><span class="err">├──</span><span class="w"> </span><span class="n">run_train</span><span class="o">.</span><span class="n">sh</span><span class="w">             </span><span class="c1"># 训练启动</span>
+<span class="err">│</span><span class="w">   </span><span class="err">└──</span><span class="w"> </span><span class="n">run_eval</span><span class="o">.</span><span class="n">sh</span><span class="w">              </span><span class="c1"># 评估启动</span>
+<span class="err">└──</span><span class="w"> </span><span class="n">requirements</span><span class="o">.</span><span class="n">txt</span>
+</code></pre></div>
+
+<h2>快速开始</h2>
+<div class="codehilite"><pre><span></span><code><span class="c1"># 1. 安装依赖</span>
+pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements.txt
+
+<span class="c1"># 2. 生成 mock 数据（跳过网络下载，验证 pipeline）</span>
+python<span class="w"> </span>-m<span class="w"> </span>data.mock_era5<span class="w"> </span>--years<span class="w"> </span><span class="m">1995</span><span class="w"> </span><span class="m">2016</span><span class="w"> </span>--output<span class="w"> </span>./data/raw/era5_monthly
+
+<span class="c1"># 3. 计算归一化统计量</span>
+python<span class="w"> </span>-m<span class="w"> </span>data.normalization<span class="w"> </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">1995</span><span class="w"> </span><span class="m">2014</span>
+
+<span class="c1"># 4. 训练（GPU 推荐，CPU 也可）</span>
+python<span class="w"> </span>-m<span class="w"> </span>training.train<span class="w"> </span>--config<span class="w"> </span>configs/config.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--epochs<span class="w"> </span><span class="m">20</span><span class="w"> </span>--device<span class="w"> </span>cuda
+
+<span class="c1"># 5. 评估</span>
+python<span class="w"> </span>-m<span class="w"> </span>evaluation.run_eval<span class="w"> </span>--checkpoint<span class="w"> </span>./checkpoints/best_model.pt<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">2015</span><span class="w"> </span><span class="m">2016</span><span class="w"> </span>--device<span class="w"> </span>cuda
+
+<span class="c1"># 6. 可视化</span>
+python<span class="w"> </span>-m<span class="w"> </span>evaluation.run_plots<span class="w"> </span>--checkpoint<span class="w"> </span>./checkpoints/best_model.pt<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">2015</span><span class="w"> </span><span class="m">2016</span><span class="w"> </span>--output<span class="w"> </span>./results<span class="w"> </span>--device<span class="w"> </span>cuda
+</code></pre></div>
+
+<blockquote>
+<p>用真实 ERA5 数据时，将步骤 2 替换为 <code>bash scripts/run_download.sh</code>（需要 CDS 账号）。</p>
+</blockquote>
+<h2>后续升级路线</h2>
+<ul>
+<li><strong>Phase 2</strong>：日→周聚合 + 真实气候指数 + 多 lead time 联合训练</li>
+<li><strong>Phase 3</strong>：Gaussian → Conditional Flow Matching（CFM）概率升级</li>
+<li><strong>Phase 4</strong>：后处理校准 + 极端事件评估 + 可解释性分析</li>
+</ul>
+<h2>参考文献</h2>
+<ul>
+<li>Vitart et al. (2017) "The Subseasonal to Seasonal (S2S) Prediction Project"</li>
+<li>Gneiting &amp; Raftery (2007) "Strictly Proper Scoring Rules"</li>
+<li>Liu et al. (2022) "ConvNeXt" — encoder backbone</li>
+<li>Lipman et al. (ICML 2023) "Conditional Flow Matching"</li>
+<li>GenCast (Price et al., 2024) — probabilistic weather prediction</li>
+</ul>
+</body>
+</html>

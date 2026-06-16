@@ -1,0 +1,39 @@
+# Data (can be regenerated with mock_era5.py or downloaded from CDS)
+data/raw/
+data/processed/
+
+# Model checkpoints (large, can be retrained)
+checkpoints/
+
+# Results / plots
+results/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.eggs/
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# CDS credentials (DO NOT commit)
+.cdsapirc

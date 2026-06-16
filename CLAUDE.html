@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CLAUDE</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 900px; margin: 0 auto; padding: 2em; line-height: 1.6; color: #222; background: #fff; }
+  h1 { border-bottom: 2px solid #0366d6; padding-bottom: 0.3em; }
+  h2 { border-bottom: 1px solid #e1e4e8; padding-bottom: 0.2em; margin-top: 1.5em; }
+  code { background: #f6f8fa; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f6f8fa; padding: 16px; border-radius: 6px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+  th, td { border: 1px solid #dfe2e5; padding: 8px 12px; text-align: left; }
+  th { background: #f6f8fa; font-weight: 600; }
+  tr:nth-child(even) { background: #fafbfc; }
+  blockquote { border-left: 4px solid #0366d6; margin: 0; padding: 0 1em; color: #555; }
+  a { color: #0366d6; }
+  strong { font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>CLAUDE.md</h1>
+<h2>项目概述</h2>
+<p>全球 1.5° 概率性 S2S（次季节到季节）天气预报深度学习模型。
+核心聚焦 <strong>3 周+ lead time</strong> 的 t2m（温度）和 tp（降水）预测。</p>
+<h2>架构速览</h2>
+<div class="codehilite"><pre><span></span><code>输入 x_atmos (6ch) → ConvNeXtEncoder → z_atmos
+输入 x_slow  (4ch) → SlowVarEncoder  → z_slow
+输入 x_index (6维) → IndexEmbedding  → z_idx
+
+z_slow (query) + z_atmos (key/value) → CrossAttentionFusion → z_fused
+z_fused + z_idx → GaussianHead  → μ, σ (t2m)
+                → QuantileHead  → 5个分位数 (tp)
+</code></pre></div>
+
+<ul>
+<li><strong>AtmosEncoder</strong>: ConvNeXt，3 stage，每个 stage 2x 下采样 → 输出 1/8 分辨率</li>
+<li><strong>SlowEncoder</strong>: 更轻的 ConvNeXt，2 stage → 1/4 分辨率</li>
+<li><strong>CrossAttention</strong>: slow 特征作为 query 关注 atmos 特征，建模遥相关</li>
+<li><strong>GaussianHead</strong>: 输出 μ 和 log σ，CRPS 解析损失</li>
+<li><strong>QuantileHead</strong>: 输出 [0.1, 0.25, 0.5, 0.75, 0.9] 分位数，pinball loss</li>
+</ul>
+<h2>关键文件</h2>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>configs/config.yaml</code></td>
+<td>主配置：模型结构、训练参数、数据路径</td>
+</tr>
+<tr>
+<td><code>configs/variables.yaml</code></td>
+<td>12 个变量的定义、分组、归一化参数</td>
+</tr>
+<tr>
+<td><code>models/weather_model.py</code></td>
+<td>顶层模型，组装所有子模块</td>
+</tr>
+<tr>
+<td><code>models/encoder.py</code></td>
+<td>ConvNeXt 大气编码器</td>
+</tr>
+<tr>
+<td><code>models/cross_attention.py</code></td>
+<td>交叉注意力融合 + 位置编码</td>
+</tr>
+<tr>
+<td><code>models/prob_head.py</code></td>
+<td>Gaussian 头和分位数头</td>
+</tr>
+<tr>
+<td><code>data/dataset.py</code></td>
+<td>PyTorch Dataset，load .nc 文件，归一化</td>
+</tr>
+<tr>
+<td><code>data/mock_era5.py</code></td>
+<td><strong>生成本地模拟数据</strong>（无网测试用）</td>
+</tr>
+<tr>
+<td><code>losses/crps_loss.py</code></td>
+<td>Gaussian CRPS 解析形式 + cos(lat) 加权</td>
+</tr>
+<tr>
+<td><code>losses/quantile_loss.py</code></td>
+<td>分位数 pinball loss</td>
+</tr>
+<tr>
+<td><code>training/train.py</code></td>
+<td>训练主脚本（含 warmup + cosine decay）</td>
+</tr>
+<tr>
+<td><code>evaluation/run_eval.py</code></td>
+<td>评估入口：CRPS/CRPSS/RMSE vs 气候态 baseline</td>
+</tr>
+<tr>
+<td><code>evaluation/run_plots.py</code></td>
+<td>可视化入口：空间图、散点图、rank histogram</td>
+</tr>
+<tr>
+<td><code>evaluation/metrics.py</code></td>
+<td>指标函数库</td>
+</tr>
+<tr>
+<td><code>evaluation/baselines.py</code></td>
+<td>气候态/持续性 baseline</td>
+</tr>
+</tbody>
+</table>
+<h2>工作流</h2>
+<div class="codehilite"><pre><span></span><code><span class="c1"># 1. 数据（二选一）</span>
+python<span class="w"> </span>-m<span class="w"> </span>data.mock_era5<span class="w"> </span>--years<span class="w"> </span><span class="m">1995</span><span class="w"> </span><span class="m">2016</span><span class="w"> </span>--output<span class="w"> </span>./data/raw/era5_monthly<span class="w">  </span><span class="c1"># 模拟</span>
+<span class="c1"># 或</span>
+python<span class="w"> </span>-m<span class="w"> </span>data.download_era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">1995</span><span class="w"> </span><span class="m">2019</span><span class="w"> </span>...<span class="w">                     </span><span class="c1"># 真实 CDS</span>
+
+<span class="c1"># 2. 归一化</span>
+python<span class="w"> </span>-m<span class="w"> </span>data.normalization<span class="w"> </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">1995</span><span class="w"> </span><span class="m">2014</span>
+
+<span class="c1"># 3. 训练</span>
+python<span class="w"> </span>-m<span class="w"> </span>training.train<span class="w"> </span>--config<span class="w"> </span>configs/config.yaml<span class="w"> </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--device<span class="w"> </span>cuda
+
+<span class="c1"># 4. 评估</span>
+python<span class="w"> </span>-m<span class="w"> </span>evaluation.run_eval<span class="w"> </span>--checkpoint<span class="w"> </span>./checkpoints/best_model.pt<span class="w"> </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">2015</span><span class="w"> </span><span class="m">2016</span><span class="w"> </span>--device<span class="w"> </span>cuda
+
+<span class="c1"># 5. 可视化</span>
+python<span class="w"> </span>-m<span class="w"> </span>evaluation.run_plots<span class="w"> </span>--checkpoint<span class="w"> </span>./checkpoints/best_model.pt<span class="w"> </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">2015</span><span class="w"> </span><span class="m">2016</span><span class="w"> </span>--output<span class="w"> </span>./results<span class="w"> </span>--device<span class="w"> </span>cuda
+</code></pre></div>
+
+<h2>数据格式</h2>
+<ul>
+<li><strong>输入</strong>: 每年一个 <code>era5_monthly_surface_YYYY.nc</code>，包含 <code>valid_time × latitude × longitude</code> 的 12 个变量</li>
+<li><strong>网格</strong>: 121×240（1.5°），纬度 -90 到 90，经度 0 到 358.5</li>
+<li><strong>变量顺序</strong>: <code>[t2m, tp, sst, swvl1, sd, siconc, msl, u10, v10, tisr, ssr, str]</code></li>
+<li><strong>target</strong>: t2m 和 tp（前两个变量）</li>
+<li><strong>归一化</strong>: 在 <code>dataset.py.__getitem__</code> 中做 z-score，mean/std 存在 <code>data/processed/norm_stats.json</code></li>
+</ul>
+<h2>注意</h2>
+<ul>
+<li><code>self.data</code> 存的是<strong>原始物理值</strong>（未归一化），归一化仅在 <code>__getitem__</code> 返回时应用</li>
+<li>SST 在陆地是 NaN，土壤湿度在海洋是 NaN → <code>torch.nan_to_num(x, nan=0.0)</code> 填充</li>
+<li>配置里的 <code>type</code> 字段已删除（会导致 <code>__init__</code> 收到不认识的 kwargs）</li>
+<li>读取 .nc 文件不要指定 <code>engine="netcdf4"</code>，让 xarray 自动选后端</li>
+<li>训练时 target 也被归一化了（模型输出归一化空间的值），评估时需反归一化</li>
+<li>loss 的纬度加权：<code>cos(lat)</code> 权重，形状 (121, 1)，不要 squeeze 最后一维</li>
+</ul>
+</body>
+</html>

@@ -1,0 +1,98 @@
+# Main configuration for the weather probability model
+# Phase 1: Monthly data prototype
+
+# ---- Data ----
+data:
+  # ERA5 monthly averaged data
+  era5_monthly_dir: "./data/raw/era5_monthly"
+  era5_processed_dir: "./data/processed"
+
+  # Time range
+  train_years: [1995, 2014]    # 20 years training
+  val_years: [2015, 2017]      # 3 years validation
+  test_years: [2018, 2019]     # 2 years testing
+
+  # Lead time (in months, for monthly data)
+  # For Phase 1 with monthly data: lead_time=1 means 1-month-ahead prediction
+  # This is analogous to ~4-week prediction
+  lead_times: [1]              # Phase 1: single lead time (1 month ahead)
+  # lead_times: [1, 2, 3]      # Phase 2: multi-lead-time
+
+  # Regridding
+  target_resolution: 1.5       # degrees
+  regrid_method: "bilinear"    # conservative or bilinear
+
+# ---- Model ----
+model:
+  # Encoder
+  atmos_encoder:
+    in_channels: 6             # atmos_state + energy_budget + external_forcing
+    embed_dims: [96, 192, 384, 768]
+    depths: [3, 3, 9, 3]
+
+  slow_encoder:
+    in_channels: 4             # slow_forcing variables
+    embed_dims: [64, 128, 256]
+    depths: [2, 2, 4]
+
+  # Cross-attention fusion
+  cross_attention:
+    dim: 256
+    num_heads: 8
+    num_layers: 4
+    dropout: 0.1
+
+  # Index embedding
+  index_embedding:
+    num_indices: 6             # RMM1, RMM2, Nino3.4, NAO, AO, doy_sin, doy_cos
+    embed_dim: 64
+
+  # Probabilistic heads
+  prob_heads:
+    t2m:
+      hidden_dims: [256, 128]
+    tp:
+      quantiles: [0.1, 0.25, 0.5, 0.75, 0.9]
+      hidden_dims: [256, 128]
+
+# ---- Training ----
+training:
+  batch_size: 32
+  num_epochs: 100
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-5
+  lr_scheduler: "cosine"
+  warmup_epochs: 5
+
+  # Loss weights
+  loss_weights:
+    t2m: 1.0                  # CRPS loss weight
+    tp: 0.5                   # Quantile loss weight
+
+  # Latitude weighting
+  use_latitude_weight: true
+
+  # Optimizer
+  optimizer: "adamw"
+
+  # Mixed precision
+  use_amp: true
+
+  # Checkpoint
+  save_dir: "./checkpoints"
+  save_every: 10              # epochs
+
+# ---- Evaluation ----
+evaluation:
+  num_ensemble_members: 30    # For later phases
+  metrics:
+    - "crps"
+    - "crpss"
+    - "rmse"
+    - "acc"
+
+# ---- Hardware ----
+hardware:
+  device: "cuda"
+  num_workers: 4
+  seed: 42

@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SETUP</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 900px; margin: 0 auto; padding: 2em; line-height: 1.6; color: #222; background: #fff; }
+  h1 { border-bottom: 2px solid #0366d6; padding-bottom: 0.3em; }
+  h2 { border-bottom: 1px solid #e1e4e8; padding-bottom: 0.2em; margin-top: 1.5em; }
+  code { background: #f6f8fa; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #f6f8fa; padding: 16px; border-radius: 6px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+  th, td { border: 1px solid #dfe2e5; padding: 8px 12px; text-align: left; }
+  th { background: #f6f8fa; font-weight: 600; }
+  tr:nth-child(even) { background: #fafbfc; }
+  blockquote { border-left: 4px solid #0366d6; margin: 0; padding: 0 1em; color: #555; }
+  a { color: #0366d6; }
+  strong { font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>换电脑运行指南</h1>
+<h2>你需要拷贝的东西</h2>
+<p><strong>只需要拷贝 <code>weather_prob_model</code> 这一个文件夹。</strong> 里面包含了所有代码、配置、数据（mock 数据 ~660MB）和训练好的模型。</p>
+<p>拷贝方式任选其一：
+- U 盘 / 移动硬盘直接拷文件夹
+- 上传到 GitHub / GitLab，新电脑 <code>git clone</code> 下来
+- 网络共享 / 云盘传压缩包</p>
+<hr />
+<h2>新电脑上只需 3 步</h2>
+<h3>第 1 步：装 Python 环境</h3>
+<p>打开终端（Windows 用 PowerShell，Mac/Linux 用 Terminal），进入项目目录：</p>
+<div class="codehilite"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>weather_prob_model
+</code></pre></div>
+
+<p><strong>Windows（推荐 conda）：</strong></p>
+<div class="codehilite"><pre><span></span><code>conda<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span>weather-prob<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.12<span class="w"> </span>-y
+conda<span class="w"> </span>activate<span class="w"> </span>weather-prob
+</code></pre></div>
+
+<p><strong>Mac / Linux：</strong></p>
+<div class="codehilite"><pre><span></span><code>python3<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>venv
+<span class="nb">source</span><span class="w"> </span>venv/bin/activate
+</code></pre></div>
+
+<p>然后装 PyTorch 和依赖：</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># GPU 版（有 NVIDIA 显卡）</span>
+pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>torchaudio<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/cu124
+
+<span class="c1"># CPU 版（无显卡 / Mac）</span>
+pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>torchvision<span class="w"> </span>torchaudio
+
+<span class="c1"># 项目依赖（不管 GPU 还是 CPU 都要装）</span>
+pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements.txt
+</code></pre></div>
+
+<p>验证环境：</p>
+<div class="codehilite"><pre><span></span><code>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import torch; print(&#39;CUDA:&#39;, torch.cuda.is_available())&quot;</span>
+python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;from models.weather_model import WeatherProbModel; print(&#39;OK&#39;)&quot;</span>
+</code></pre></div>
+
+<p>看到 <code>OK</code> 就说明环境好了。如果最后一步报错，通常是少装了依赖，<code>pip install -r requirements.txt</code> 重新跑一遍。</p>
+<h3>第 2 步：准备数据</h3>
+<p><strong>情况 A — 你拷贝的文件夹里已经有数据</strong></p>
+<p><code>data/raw/era5_monthly/</code> 里有 <code>.nc</code> 文件 + <code>data/processed/</code> 里有 <code>norm_stats.json</code>，直接跳到第 3 步训练，什么都不用做。</p>
+<p><strong>情况 B — 文件夹里没有数据（从 git clone 的，或者只拷了代码）</strong></p>
+<p>几分钟本地生成 mock 数据：</p>
+<div class="codehilite"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>data.mock_era5<span class="w"> </span>--years<span class="w"> </span><span class="m">1995</span><span class="w"> </span><span class="m">2016</span><span class="w"> </span>--output<span class="w"> </span>./data/raw/era5_monthly
+python<span class="w"> </span>-m<span class="w"> </span>data.normalization<span class="w"> </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">1995</span><span class="w"> </span><span class="m">2014</span>
+</code></pre></div>
+
+<p>如果需要真实 ERA5 数据（需要 CDS 账号）：</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># 1. 在 https://cds.climate.copernicus.eu/ 注册</span>
+<span class="c1"># 2. 创建凭据文件 ~/.cdsapirc</span>
+<span class="c1"># 3. 下载</span>
+python<span class="w"> </span>-m<span class="w"> </span>data.download_era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">1995</span><span class="w"> </span><span class="m">2019</span><span class="w"> </span>--output<span class="w"> </span>./data/raw/era5_monthly
+python<span class="w"> </span>-m<span class="w"> </span>data.download_climate_indices<span class="w"> </span>--output<span class="w"> </span>./data/raw/climate_indices
+python<span class="w"> </span>-m<span class="w"> </span>data.normalization<span class="w"> </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">1995</span><span class="w"> </span><span class="m">2014</span>
+</code></pre></div>
+
+<h3>第 3 步：训练</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1"># 有 GPU</span>
+python<span class="w"> </span>-m<span class="w"> </span>training.train<span class="w"> </span>--config<span class="w"> </span>configs/config.yaml<span class="w"> </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--output_dir<span class="w"> </span>./checkpoints<span class="w"> </span>--epochs<span class="w"> </span><span class="m">100</span><span class="w"> </span>--device<span class="w"> </span>cuda
+
+<span class="c1"># 无 GPU</span>
+python<span class="w"> </span>-m<span class="w"> </span>training.train<span class="w"> </span>--config<span class="w"> </span>configs/config.yaml<span class="w"> </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--output_dir<span class="w"> </span>./checkpoints<span class="w"> </span>--epochs<span class="w"> </span><span class="m">20</span><span class="w"> </span>--device<span class="w"> </span>cpu
+</code></pre></div>
+
+<hr />
+<h2>训练完评估</h2>
+<div class="codehilite"><pre><span></span><code><span class="c1"># 数值指标</span>
+python<span class="w"> </span>-m<span class="w"> </span>evaluation.run_eval<span class="w"> </span>--checkpoint<span class="w"> </span>./checkpoints/best_model.pt<span class="w"> </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">2015</span><span class="w"> </span><span class="m">2016</span><span class="w"> </span>--device<span class="w"> </span>cuda
+
+<span class="c1"># 生成图表</span>
+python<span class="w"> </span>-m<span class="w"> </span>evaluation.run_plots<span class="w"> </span>--checkpoint<span class="w"> </span>./checkpoints/best_model.pt<span class="w"> </span>--data_dir<span class="w"> </span>./data/raw/era5_monthly<span class="w"> </span>--years<span class="w"> </span><span class="m">2015</span><span class="w"> </span><span class="m">2016</span><span class="w"> </span>--output<span class="w"> </span>./results<span class="w"> </span>--device<span class="w"> </span>cuda
+</code></pre></div>
+
+<hr />
+<h2>硬件参考</h2>
+<table>
+<thead>
+<tr>
+<th>配置</th>
+<th>最低</th>
+<th>推荐</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GPU 显存</td>
+<td>3 GB</td>
+<td>8 GB+</td>
+</tr>
+<tr>
+<td>磁盘</td>
+<td>2 GB</td>
+<td>10 GB</td>
+</tr>
+<tr>
+<td>RAM</td>
+<td>8 GB</td>
+<td>16 GB+</td>
+</tr>
+<tr>
+<td>系统</td>
+<td>Win/Mac/Linux</td>
+<td>Linux</td>
+</tr>
+</tbody>
+</table>
+<p>20 epochs 训练时间参考：
+- GPU（RTX 3090）：~5 分钟
+- GPU（Quadro P2200）：~3 分钟
+- CPU：~30 分钟</p>
+<hr />
+<h2>常见问题</h2>
+<p><strong>显存不够（CUDA out of memory）</strong></p>
+<div class="codehilite"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>training.train<span class="w"> </span>...<span class="w"> </span>--batch_size<span class="w"> </span><span class="m">8</span>
+</code></pre></div>
+
+<p><strong>netCDF 读取出错</strong>
+报 <code>Unknown file format</code> 通常是 Windows 上 netCDF4 C 库问题。用 mock 数据（scipy 写的）可避免。或者删除旧 <code>.nc</code> 文件重新生成 mock 数据。</p>
+<p><strong>训练 loss 是 NaN</strong>
+数据里有 NaN（SST 在陆地、土壤湿度在海洋）。确认 <code>data/dataset.py</code> 里有 <code>torch.nan_to_num(input_data, nan=0.0)</code> 这一行。</p>
+<p><strong>下载 CDS 数据慢</strong>
+CDS 在欧洲，国内直连只有十几 KB/s。先用 mock 数据验证，等网络好再下载真实数据。</p>
+<p><strong>Mac 上用不了 CUDA</strong>
+正常，Mac 没有 NVIDIA GPU。用 <code>--device cpu</code> 训练，或者用 MPS（Apple Silicon）：<code>--device mps</code>。</p>
+</body>
+</html>
